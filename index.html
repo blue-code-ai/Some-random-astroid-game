@@ -2,55 +2,121 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Retro 8-Bit Asteroids</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile Retro Asteroids</title>
     <style>
         body {
             background-color: #111;
             margin: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            color: #0f0;
+            overflow: hidden; /* Stop scrolling */
+            touch-action: none; /* Stop mobile gestures */
             font-family: 'Courier New', Courier, monospace;
-            overflow: hidden;
+            color: #0f0;
         }
         canvas {
-            border: 4px solid #333;
+            display: block;
             background-color: #000;
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
-            image-rendering: pixelated; /* Forces sharp edges for 8-bit feel */
+            image-rendering: pixelated;
         }
         #ui {
             position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
+            top: 10px;
+            left: 0;
+            width: 100%;
             text-align: center;
-            pointer-events: none;
+            pointer-events: none; /* Clicks pass through to game */
+            z-index: 10;
         }
-        h1 { margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
-        p { margin: 5px 0 0; font-size: 14px; opacity: 0.8; }
+        h1 { margin: 0; font-size: 20px; text-transform: uppercase; letter-spacing: 2px; text-shadow: 0 0 5px #0f0; }
+        p { margin: 2px 0 0; font-size: 12px; opacity: 0.8; }
+        
+        /* Mobile Controls */
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            width: 100%;
+            height: 120px;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+            pointer-events: none; /* Let clicks pass through empty spaces */
+            z-index: 20;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 15px;
+            pointer-events: auto; /* Enable clicks on buttons */
+        }
+
+        .btn {
+            width: 70px;
+            height: 70px;
+            background: rgba(0, 20, 0, 0.5);
+            border: 2px solid #0f0;
+            border-radius: 10px;
+            color: #0f0;
+            font-size: 24px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+            touch-action: none;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+        }
+
+        .btn:active, .btn.pressed {
+            background: #0f0;
+            color: #000;
+            box-shadow: 0 0 15px #0f0;
+        }
+
+        /* Specific alignment for right side */
+        .right-group {
+            align-items: flex-end;
+        }
     </style>
 </head>
 <body>
 
     <div id="ui">
         <h1>Sector 8-Bit</h1>
-        <p>Arrows to Move | Space to Shoot</p>
         <p id="scoreBoard">Score: 0</p>
+        <p id="startMsg" style="margin-top:10px; color:white;">Press Shoot/Space to Start</p>
     </div>
 
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="controls">
+        <div class="control-group">
+            <div class="btn" id="btnLeft">◀</div>
+            <div class="btn" id="btnRight">▶</div>
+        </div>
+
+        <div class="control-group right-group">
+            <div class="btn" id="btnFire">●</div> <div class="btn" id="btnThrust">▲</div> </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const scoreEl = document.getElementById('scoreBoard');
+        const startMsg = document.getElementById('startMsg');
+
+        // Resize canvas to full screen
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
 
         // Game State
         let score = 0;
-        let gameOver = false;
+        let gameOver = true; // Start in "Game Over" state so user clicks start
+        let gameLoopId;
         
         // Inputs
         const keys = {
@@ -64,53 +130,75 @@
         const ship = {
             x: canvas.width / 2,
             y: canvas.height / 2,
-            r: 15, // Radius (size)
-            a: -Math.PI / 2, // Angle (facing up)
-            rot: 0, // Rotation speed
-            thrusting: false,
+            r: 15,
+            a: -Math.PI / 2,
+            rot: 0,
             thrust: { x: 0, y: 0 }
         };
 
-        // Arrays for bullets and asteroids
         let bullets = [];
         let asteroids = [];
 
         // Configuration
         const FPS = 60;
-        const FRICTION = 0.7; // 0 = no friction, 1 = lots of friction
+        const FRICTION = 0.7;
         const SHIP_THRUST = 5; 
-        const SHIP_TURN_SPD = 360; // Degrees per second
-        const LASER_SPD = 500; // Pixels per second
-        const ASTEROID_SPAWN_RATE = 100; // Frames between spawns
+        const SHIP_TURN_SPD = 360; 
+        const LASER_SPD = 500; 
+        const ASTEROID_SPAWN_RATE = 100; 
         let spawnTimer = 0;
 
-        // Event Listeners
-        document.addEventListener('keydown', keyDown);
-        document.addEventListener('keyup', keyUp);
+        // --- INPUT HANDLING ---
+        
+        // Keyboard Support
+        document.addEventListener('keydown', (ev) => handleInput(ev.code, true));
+        document.addEventListener('keyup', (ev) => handleInput(ev.code, false));
 
-        function keyDown(ev) {
-            if(gameOver && ev.code === "Space") {
-                resetGame();
-                return;
-            }
+        // Touch Button Support
+        function setupTouchBtn(id, code) {
+            const btn = document.getElementById(id);
             
-            if (ev.code === "ArrowUp") keys.ArrowUp = true;
-            if (ev.code === "ArrowLeft") keys.ArrowLeft = true;
-            if (ev.code === "ArrowRight") keys.ArrowRight = true;
-            if (ev.code === "Space") {
-                // Prevent machine-gunning by checking state manually if needed, 
-                // but for simple arcade feel, repeating on hold is okay? 
-                // Let's do single shot per press for "retro" feel
-                if(!keys.Space) shootLaser();
-                keys.Space = true;
-            }
+            const press = (e) => {
+                e.preventDefault(); // Stop mouse emulation
+                btn.classList.add('pressed');
+                handleInput(code, true);
+            };
+            
+            const release = (e) => {
+                e.preventDefault();
+                btn.classList.remove('pressed');
+                handleInput(code, false);
+            };
+
+            btn.addEventListener('touchstart', press, {passive: false});
+            btn.addEventListener('touchend', release);
+            btn.addEventListener('mousedown', press); // Mouse fallback for testing on PC
+            btn.addEventListener('mouseup', release);
+            btn.addEventListener('mouseleave', release);
         }
 
-        function keyUp(ev) {
-            if (ev.code === "ArrowUp") keys.ArrowUp = false;
-            if (ev.code === "ArrowLeft") keys.ArrowLeft = false;
-            if (ev.code === "ArrowRight") keys.ArrowRight = false;
-            if (ev.code === "Space") keys.Space = false;
+        setupTouchBtn('btnLeft', 'ArrowLeft');
+        setupTouchBtn('btnRight', 'ArrowRight');
+        setupTouchBtn('btnThrust', 'ArrowUp');
+        setupTouchBtn('btnFire', 'Space');
+
+        function handleInput(code, isDown) {
+            if (code === "ArrowUp") keys.ArrowUp = isDown;
+            if (code === "ArrowLeft") keys.ArrowLeft = isDown;
+            if (code === "ArrowRight") keys.ArrowRight = isDown;
+            
+            if (code === "Space") {
+                // Restart game logic
+                if (isDown && gameOver) {
+                    resetGame();
+                    return;
+                }
+                // Shooting logic
+                if (isDown && !keys.Space && !gameOver) {
+                    shootLaser();
+                }
+                keys.Space = isDown;
+            }
         }
 
         function resetGame() {
@@ -123,12 +211,19 @@
             bullets = [];
             score = 0;
             scoreEl.innerText = "Score: 0";
+            startMsg.style.display = 'none';
             gameOver = false;
+            
+            // Generate a few asteroids immediately
+            createAsteroid(); 
+            createAsteroid();
+            createAsteroid();
+
+            if(gameLoopId) cancelAnimationFrame(gameLoopId);
             loop();
         }
 
         function shootLaser() {
-            // Shoot from the nose of the ship
             bullets.push({
                 x: ship.x + 4/3 * ship.r * Math.cos(ship.a),
                 y: ship.y + 4/3 * ship.r * Math.sin(ship.a),
@@ -139,10 +234,9 @@
         }
 
         function createAsteroid() {
-            const size = Math.floor(Math.random() * 30) + 20; // Size between 20 and 50
+            const size = Math.floor(Math.random() * 30) + 20; 
             let x, y;
             
-            // Spawn on edges
             if (Math.random() < 0.5) {
                 x = Math.random() < 0.5 ? 0 - size : canvas.width + size;
                 y = Math.random() * canvas.height;
@@ -151,17 +245,14 @@
                 y = Math.random() < 0.5 ? 0 - size : canvas.height + size;
             }
 
-            const speed = (Math.random() * 2) + 1; // Random speed
-            const angle = Math.atan2(ship.y - y, ship.x - x); // Aim generally at player (makes it harder)
+            const speed = (Math.random() * 2) + 1; 
+            const angle = Math.atan2(ship.y - y, ship.x - x); 
 
             asteroids.push({
-                x: x,
-                y: y,
+                x: x, y: y,
                 xv: Math.cos(angle) * speed,
                 yv: Math.sin(angle) * speed,
-                size: size,
-                color: "#" + Math.floor(Math.random()*16777215).toString(16) // Random color purely for 8-bit chaos, or keep green?
-                // Let's keep it strictly green for retro style
+                size: size
             });
         }
 
@@ -173,29 +264,27 @@
             ctx.fillStyle = "black";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Thrust Logic
+            // Thrust Physics
             if (keys.ArrowUp) {
                 ship.thrust.x += SHIP_THRUST * Math.cos(ship.a) / FPS;
                 ship.thrust.y += SHIP_THRUST * Math.sin(ship.a) / FPS;
                 
-                // Draw Thruster flame
+                // Draw Thrust Flame
                 ctx.fillStyle = "orange";
                 ctx.strokeStyle = "yellow";
-                ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo( // Rear left
+                ctx.moveTo(
                     ship.x - ship.r * (2/3 * Math.cos(ship.a) + 0.5 * Math.sin(ship.a)),
                     ship.y - ship.r * (2/3 * Math.sin(ship.a) - 0.5 * Math.cos(ship.a))
                 );
-                ctx.lineTo( // Rear center (behind ship)
+                ctx.lineTo(
                     ship.x - ship.r * 6/3 * Math.cos(ship.a),
                     ship.y - ship.r * 6/3 * Math.sin(ship.a)
                 );
-                ctx.lineTo( // Rear right
+                ctx.lineTo(
                     ship.x - ship.r * (2/3 * Math.cos(ship.a) - 0.5 * Math.sin(ship.a)),
                     ship.y - ship.r * (2/3 * Math.sin(ship.a) + 0.5 * Math.cos(ship.a))
                 );
-                ctx.closePath();
                 ctx.fill();
                 ctx.stroke();
             } else {
@@ -203,46 +292,44 @@
                 ship.thrust.y -= FRICTION * ship.thrust.y / FPS;
             }
 
-            // Rotation
+            // Rotate
             if (keys.ArrowLeft) ship.a -= SHIP_TURN_SPD / 180 * Math.PI / FPS;
             if (keys.ArrowRight) ship.a += SHIP_TURN_SPD / 180 * Math.PI / FPS;
 
-            // Move Ship
+            // Move
             ship.x += ship.thrust.x;
             ship.y += ship.thrust.y;
 
-            // Handle Screen Edge (Wrapping)
+            // Screen Wrap
             if (ship.x < 0 - ship.r) ship.x = canvas.width + ship.r;
             else if (ship.x > canvas.width + ship.r) ship.x = 0 - ship.r;
             if (ship.y < 0 - ship.r) ship.y = canvas.height + ship.r;
             else if (ship.y > canvas.height + ship.r) ship.y = 0 - ship.r;
 
-            // Draw Ship (Triangle)
+            // Draw Ship
             ctx.strokeStyle = "white";
-            ctx.lineWidth = 2; // Retro line thickness
+            ctx.lineWidth = 2; 
             ctx.beginPath();
-            ctx.moveTo( // Nose
+            ctx.moveTo(
                 ship.x + 4/3 * ship.r * Math.cos(ship.a),
                 ship.y + 4/3 * ship.r * Math.sin(ship.a)
             );
-            ctx.lineTo( // Rear Left
+            ctx.lineTo(
                 ship.x - ship.r * (2/3 * Math.cos(ship.a) + Math.sin(ship.a)),
                 ship.y - ship.r * (2/3 * Math.sin(ship.a) - Math.cos(ship.a))
             );
-            ctx.lineTo( // Rear Right
+            ctx.lineTo(
                 ship.x - ship.r * (2/3 * Math.cos(ship.a) - Math.sin(ship.a)),
                 ship.y - ship.r * (2/3 * Math.sin(ship.a) + Math.cos(ship.a))
             );
-            ctx.closePath();
             ctx.stroke();
 
-            // Draw Lasers
+            // Bullets
             for (let i = bullets.length - 1; i >= 0; i--) {
                 bullets[i].x += bullets[i].xv;
                 bullets[i].y += bullets[i].yv;
-                bullets[i].dist += Math.sqrt(Math.pow(bullets[i].xv, 2) + Math.pow(bullets[i].yv, 2));
-
-                // Remove if off screen edge
+                
+                // Off screen check
                 if (bullets[i].x < 0 || bullets[i].x > canvas.width || bullets[i].y < 0 || bullets[i].y > canvas.height) {
                     bullets.splice(i, 1);
                     continue;
@@ -254,27 +341,69 @@
                 ctx.fill();
             }
 
-            // Spawn Asteroids
+            // Asteroids
             spawnTimer++;
             if (spawnTimer > ASTEROID_SPAWN_RATE) {
                 createAsteroid();
                 spawnTimer = 0;
             }
 
-            // Draw and Move Asteroids (Squares)
             for (let i = asteroids.length - 1; i >= 0; i--) {
                 const a = asteroids[i];
                 a.x += a.xv;
                 a.y += a.yv;
 
-                // Screen Wrap for Asteroids
                 if (a.x < 0 - a.size) a.x = canvas.width + a.size;
                 else if (a.x > canvas.width + a.size) a.x = 0 - a.size;
                 if (a.y < 0 - a.size) a.y = canvas.height + a.size;
                 else if (a.y > canvas.height + a.size) a.y = 0 - a.size;
 
-                // Draw Square Asteroid
-                ctx.strokeStyle = "#0f0"; // Retro Green
+                ctx.strokeStyle = "#0f0";
+                ctx.strokeRect(a.x - a.size/2, a.y - a.size/2, a.size, a.size);
+
+                // Collision: Ship
+                if (ship.x > a.x - a.size/2 && ship.x < a.x + a.size/2 &&
+                    ship.y > a.y - a.size/2 && ship.y < a.y + a.size/2) {
+                    drawGameOver();
+                    return; 
+                }
+
+                // Collision: Bullet
+                for (let j = bullets.length - 1; j >= 0; j--) {
+                    let b = bullets[j];
+                    if (b.x > a.x - a.size/2 && b.x < a.x + a.size/2 &&
+                        b.y > a.y - a.size/2 && b.y < a.y + a.size/2) {
+                        score += 100;
+                        scoreEl.innerText = "Score: " + score;
+                        asteroids.splice(i, 1);
+                        bullets.splice(j, 1);
+                        break;
+                    }
+                }
+            }
+
+            gameLoopId = requestAnimationFrame(loop);
+        }
+
+        function drawGameOver() {
+            gameOver = true;
+            ctx.fillStyle = "white";
+            ctx.font = "30px Courier New";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+            startMsg.style.display = 'block';
+        }
+        
+        // Initial render
+        ctx.fillStyle = "black";
+        ctx.fillRect(0,0, canvas.width, canvas.height);
+        drawGameOver();
+        startMsg.innerText = "Press Shoot Button to Start";
+
+    </script>
+</body>
+</html>
+   ctx.strokeStyle = "#0f0"; // Retro Green
                 ctx.lineWidth = 2;
                 ctx.strokeRect(a.x - a.size/2, a.y - a.size/2, a.size, a.size);
 
