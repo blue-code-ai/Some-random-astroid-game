@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Retro 8-Bit Asteroids</title>
+    <style>
+        body {
+            background-color: #111;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #0f0;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+        canvas {
+            border: 4px solid #333;
+            background-color: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+            image-rendering: pixelated; /* Forces sharp edges for 8-bit feel */
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            pointer-events: none;
+        }
+        h1 { margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
+        p { margin: 5px 0 0; font-size: 14px; opacity: 0.8; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>Sector 8-Bit</h1>
+        <p>Arrows to Move | Space to Shoot</p>
+        <p id="scoreBoard">Score: 0</p>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('scoreBoard');
+
+        // Game State
+        let score = 0;
+        let gameOver = false;
+        
+        // Inputs
+        const keys = {
+            ArrowUp: false,
+            ArrowLeft: false,
+            ArrowRight: false,
+            Space: false
+        };
+
+        // Ship Object
+        const ship = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            r: 15, // Radius (size)
+            a: -Math.PI / 2, // Angle (facing up)
+            rot: 0, // Rotation speed
+            thrusting: false,
+            thrust: { x: 0, y: 0 }
+        };
+
+        // Arrays for bullets and asteroids
+        let bullets = [];
+        let asteroids = [];
+
+        // Configuration
+        const FPS = 60;
+        const FRICTION = 0.7; // 0 = no friction, 1 = lots of friction
+        const SHIP_THRUST = 5; 
+        const SHIP_TURN_SPD = 360; // Degrees per second
+        const LASER_SPD = 500; // Pixels per second
+        const ASTEROID_SPAWN_RATE = 100; // Frames between spawns
+        let spawnTimer = 0;
+
+        // Event Listeners
+        document.addEventListener('keydown', keyDown);
+        document.addEventListener('keyup', keyUp);
+
+        function keyDown(ev) {
+            if(gameOver && ev.code === "Space") {
+                resetGame();
+                return;
+            }
+            
+            if (ev.code === "ArrowUp") keys.ArrowUp = true;
+            if (ev.code === "ArrowLeft") keys.ArrowLeft = true;
+            if (ev.code === "ArrowRight") keys.ArrowRight = true;
+            if (ev.code === "Space") {
+                // Prevent machine-gunning by checking state manually if needed, 
+                // but for simple arcade feel, repeating on hold is okay? 
+                // Let's do single shot per press for "retro" feel
+                if(!keys.Space) shootLaser();
+                keys.Space = true;
+            }
+        }
+
+        function keyUp(ev) {
+            if (ev.code === "ArrowUp") keys.ArrowUp = false;
+            if (ev.code === "ArrowLeft") keys.ArrowLeft = false;
+            if (ev.code === "ArrowRight") keys.ArrowRight = false;
+            if (ev.code === "Space") keys.Space = false;
+        }
+
+        function resetGame() {
+            ship.x = canvas.width / 2;
+            ship.y = canvas.height / 2;
+            ship.thrust.x = 0;
+            ship.thrust.y = 0;
+            ship.a = -Math.PI / 2;
+            asteroids = [];
+            bullets = [];
+            score = 0;
+            scoreEl.innerText = "Score: 0";
+            gameOver = false;
+            loop();
+        }
+
+        function shootLaser() {
+            // Shoot from the nose of the ship
+            bullets.push({
+                x: ship.x + 4/3 * ship.r * Math.cos(ship.a),
+                y: ship.y + 4/3 * ship.r * Math.sin(ship.a),
+                xv: LASER_SPD * Math.cos(ship.a) / FPS,
+                yv: LASER_SPD * Math.sin(ship.a) / FPS,
+                dist: 0
+            });
+        }
+
+        function createAsteroid() {
+            const size = Math.floor(Math.random() * 30) + 20; // Size between 20 and 50
+            let x, y;
+            
+            // Spawn on edges
+            if (Math.random() < 0.5) {
+                x = Math.random() < 0.5 ? 0 - size : canvas.width + size;
+                y = Math.random() * canvas.height;
+            } else {
+                x = Math.random() * canvas.width;
+                y = Math.random() < 0.5 ? 0 - size : canvas.height + size;
+            }
+
+            const speed = (Math.random() * 2) + 1; // Random speed
+            const angle = Math.atan2(ship.y - y, ship.x - x); // Aim generally at player (makes it harder)
+
+            asteroids.push({
+                x: x,
+                y: y,
+                xv: Math.cos(angle) * speed,
+                yv: Math.sin(angle) * speed,
+                size: size,
+                color: "#" + Math.floor(Math.random()*16777215).toString(16) // Random color purely for 8-bit chaos, or keep green?
+                // Let's keep it strictly green for retro style
+            });
+        }
+
+        // --- GAME LOOP ---
+        function loop() {
+            if (gameOver) return;
+
+            // Background
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Thrust Logic
+            if (keys.ArrowUp) {
+                ship.thrust.x += SHIP_THRUST * Math.cos(ship.a) / FPS;
+                ship.thrust.y += SHIP_THRUST * Math.sin(ship.a) / FPS;
+                
+                // Draw Thruster flame
+                ctx.fillStyle = "orange";
+                ctx.strokeStyle = "yellow";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo( // Rear left
+                    ship.x - ship.r * (2/3 * Math.cos(ship.a) + 0.5 * Math.sin(ship.a)),
+                    ship.y - ship.r * (2/3 * Math.sin(ship.a) - 0.5 * Math.cos(ship.a))
+                );
+                ctx.lineTo( // Rear center (behind ship)
+                    ship.x - ship.r * 6/3 * Math.cos(ship.a),
+                    ship.y - ship.r * 6/3 * Math.sin(ship.a)
+                );
+                ctx.lineTo( // Rear right
+                    ship.x - ship.r * (2/3 * Math.cos(ship.a) - 0.5 * Math.sin(ship.a)),
+                    ship.y - ship.r * (2/3 * Math.sin(ship.a) + 0.5 * Math.cos(ship.a))
+                );
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            } else {
+                ship.thrust.x -= FRICTION * ship.thrust.x / FPS;
+                ship.thrust.y -= FRICTION * ship.thrust.y / FPS;
+            }
+
+            // Rotation
+            if (keys.ArrowLeft) ship.a -= SHIP_TURN_SPD / 180 * Math.PI / FPS;
+            if (keys.ArrowRight) ship.a += SHIP_TURN_SPD / 180 * Math.PI / FPS;
+
+            // Move Ship
+            ship.x += ship.thrust.x;
+            ship.y += ship.thrust.y;
+
+            // Handle Screen Edge (Wrapping)
+            if (ship.x < 0 - ship.r) ship.x = canvas.width + ship.r;
+            else if (ship.x > canvas.width + ship.r) ship.x = 0 - ship.r;
+            if (ship.y < 0 - ship.r) ship.y = canvas.height + ship.r;
+            else if (ship.y > canvas.height + ship.r) ship.y = 0 - ship.r;
+
+            // Draw Ship (Triangle)
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 2; // Retro line thickness
+            ctx.beginPath();
+            ctx.moveTo( // Nose
+                ship.x + 4/3 * ship.r * Math.cos(ship.a),
+                ship.y + 4/3 * ship.r * Math.sin(ship.a)
+            );
+            ctx.lineTo( // Rear Left
+                ship.x - ship.r * (2/3 * Math.cos(ship.a) + Math.sin(ship.a)),
+                ship.y - ship.r * (2/3 * Math.sin(ship.a) - Math.cos(ship.a))
+            );
+            ctx.lineTo( // Rear Right
+                ship.x - ship.r * (2/3 * Math.cos(ship.a) - Math.sin(ship.a)),
+                ship.y - ship.r * (2/3 * Math.sin(ship.a) + Math.cos(ship.a))
+            );
+            ctx.closePath();
+            ctx.stroke();
+
+            // Draw Lasers
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].x += bullets[i].xv;
+                bullets[i].y += bullets[i].yv;
+                bullets[i].dist += Math.sqrt(Math.pow(bullets[i].xv, 2) + Math.pow(bullets[i].yv, 2));
+
+                // Remove if off screen edge
+                if (bullets[i].x < 0 || bullets[i].x > canvas.width || bullets[i].y < 0 || bullets[i].y > canvas.height) {
+                    bullets.splice(i, 1);
+                    continue;
+                }
+
+                ctx.fillStyle = "#0f0";
+                ctx.beginPath();
+                ctx.arc(bullets[i].x, bullets[i].y, 3, 0, Math.PI * 2, false);
+                ctx.fill();
+            }
+
+            // Spawn Asteroids
+            spawnTimer++;
+            if (spawnTimer > ASTEROID_SPAWN_RATE) {
+                createAsteroid();
+                spawnTimer = 0;
+            }
+
+            // Draw and Move Asteroids (Squares)
+            for (let i = asteroids.length - 1; i >= 0; i--) {
+                const a = asteroids[i];
+                a.x += a.xv;
+                a.y += a.yv;
+
+                // Screen Wrap for Asteroids
+                if (a.x < 0 - a.size) a.x = canvas.width + a.size;
+                else if (a.x > canvas.width + a.size) a.x = 0 - a.size;
+                if (a.y < 0 - a.size) a.y = canvas.height + a.size;
+                else if (a.y > canvas.height + a.size) a.y = 0 - a.size;
+
+                // Draw Square Asteroid
+                ctx.strokeStyle = "#0f0"; // Retro Green
+                ctx.lineWidth = 2;
+                ctx.strokeRect(a.x - a.size/2, a.y - a.size/2, a.size, a.size);
+
+                // Collision Detection: Asteroid vs Ship
+                // Simple box collision
+                if (ship.x > a.x - a.size/2 && ship.x < a.x + a.size/2 &&
+                    ship.y > a.y - a.size/2 && ship.y < a.y + a.size/2) {
+                    drawGameOver();
+                    return; // Stop loop
+                }
+
+                // Collision Detection: Bullet vs Asteroid
+                for (let j = bullets.length - 1; j >= 0; j--) {
+                    let b = bullets[j];
+                    if (b.x > a.x - a.size/2 && b.x < a.x + a.size/2 &&
+                        b.y > a.y - a.size/2 && b.y < a.y + a.size/2) {
+                        
+                        // Hit!
+                        score += 100;
+                        scoreEl.innerText = "Score: " + score;
+                        asteroids.splice(i, 1);
+                        bullets.splice(j, 1);
+                        break; // Break bullet loop since asteroid is gone
+                    }
+                }
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        function drawGameOver() {
+            gameOver = true;
+            ctx.fillStyle = "white";
+            ctx.font = "40px Courier New";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+            ctx.font = "20px Courier New";
+            ctx.fillText("Press Space to Restart", canvas.width / 2, canvas.height / 2 + 40);
+        }
+
+        // Start
+        loop();
+
+    </script>
+</body>
+</html>
